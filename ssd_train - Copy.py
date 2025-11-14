@@ -192,91 +192,155 @@ def collate_fn(batch):
     return tuple(zip(*batch))
 
 
-       
+# ----------------------------- Early Stopping -----------------------------
+class EarlyStopping:
+    def __init__(self, patience=5, min_delta=0.0, mode="max"):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.mode = mode
+        self.best_score = None
+        self.counter = 0
+        self.early_stop = False
 
-
+    def step(self, score):
+        if self.best_score is None:
+            self.best_score = score
+            return False
+        improvement = (score - self.best_score) if self.mode == "max" else (self.best_score - score)
+        if improvement > self.min_delta:
+            self.best_score = score
+            self.counter = 0
+        else:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+        return self.early_stop
+        
 # ----------------------------- Training -----------------------------
 def train_ssd(model, train_loader, val_loader, optimizer, device, epochs=2000, patience=10):
     best_val_loss = float("inf")
     patience_counter = 0
+
     train_losses, val_losses = [], []
 
-    for epoch in range(1, epochs + 1):
-        # ---------------- Training ----------------
+    for epoch in range(epochs):
         model.train()
         train_loss = 0.0
-
-        for images, targets in tqdm(train_loader, desc=f"Epoch {epoch}/{epochs} [Train]", leave=False):
+        for images, targets in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs} - Training"):
             images = [img.to(device) for img in images]
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-            optimizer.zero_grad(set_to_none=True)
-            loss = sum(model(images, targets).values())
+            optimizer.zero_grad()
+            loss_dict = model(images, targets)
+            loss = sum(loss_dict.values())
             loss.backward()
             optimizer.step()
-
             train_loss += loss.item()
 
         avg_train_loss = train_loss / len(train_loader)
         train_losses.append(avg_train_loss)
-        print(f"[Epoch {epoch}] 🔹 Train Loss: {avg_train_loss:.4f}")
+        print(f"[Epoch {epoch+1}] Training Loss: {avg_train_loss:.4f}")
 
+    
         # ---------------- Validation ----------------
         model.eval()
         val_loss = 0.0
         confidence_threshold = 0.5
         filtered_outputs = []
-
+        
         with torch.no_grad():
-            for images, targets in tqdm(val_loader, desc=f"Epoch {epoch}/{epochs} [Val]", leave=False):
+            for images, targets in val_loader:
                 images = [img.to(device) for img in images]
                 targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-
+                
+                
+                model.train()
                 try:
-                    val_loss += sum(model(images, targets).values()).item()
+                    loss_dict = model(images, targets)
+                    val_loss += sum(loss_dict.values()).item()
                 except Exception:
-                    continue
-
-                # Filter predictions
+                    val_loss += 0.0
+                    
+                                
+                #Filter predictions
+                model.eval()
                 outputs = model(images)
                 for out in outputs:
-                    keep = out["scores"] > confidence_threshold
-                    filtered_outputs.append({k: v[keep] for k, v in out.items()})
+                           keep = out["scores"] > confidence_threshold
+                           filtered_outputs.append({
+                                   "boxes": out["boxes"][keep],
+                                   "scores": out["scores"][keep],
+                                   "labels": out["labels"][keep]
+                                    })               
+                       
+
+            
 
         avg_val_loss = val_loss / len(val_loader)
         val_losses.append(avg_val_loss)
-        print(f"[Epoch {epoch}] 🔸 Val Loss: {avg_val_loss:.4f}")
+        print(f"[Epoch {epoch+1}] Validation Loss: {avg_val_loss:.4f}")
 
-        # ---------------- Evaluation ----------------
+        # ---------------- Validation ----------------
         with torch.no_grad():
-            metrics = evaluate_ssd(model, val_loader, device)
+            metrics = evaluate_ssd(model, val_loader, device)  # returns dict
             mAP = metrics.get("map", 0.0)
-        print(f"[Epoch {epoch}] 🏁 mAP: {mAP:.4f}")
+        print(f"[Epoch {epoch+1}] mAP: {mAP:.4f}")
 
         # ---------------- Early Stopping ----------------
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             patience_counter = 0
             torch.save(model.state_dict(), "outputs/best_model.pth")
-            print("✅ Model saved (best validation loss improved)")
+            print("✅ Model saved (best validation loss)")
         else:
             patience_counter += 1
             if patience_counter >= patience:
-                print(f"⏹️ Early stopping at epoch {epoch}")
+                print("Early stopping triggered")
                 break
 
-    # ---------------- Results ----------------
+    # ---------------- Return losses ----------------
     loss_df = pd.DataFrame({
         "epoch": range(1, len(train_losses) + 1),
         "train_loss": train_losses,
         "val_loss": val_losses
     })
+
     return model, loss_df
 
 
 
 
 
+
+# ----------------------------- Evaluation -----------------------------
+test_csv =
+
+ 
+
+
+def evaluate_ssd(model, dataloader, device, confidence_threshold=0.5):
+    model.eval()
+    metric = MeanAveragePrecision(iou_type="bbox", max_detection_thresholds=[1000, 1000, 1000])
+    metric.warn_on_many_detection = False
+    
+    with torch.no_grad():
+        for images, targets in dataloader:
+            images = [img.to(device) for img in images]
+            outputs = model(images)
+
+            filtered_outputs = []
+            for out in outputs:
+                keep = out["scores"] > confidence_threshold
+                filtered_outputs.append({
+                    "boxes": out["boxes"][keep].cpu(),
+                    "scores": out["scores"][keep].cpu(),
+                    "labels": out["labels"][keep].cpu()
+                })
+
+            targets_cpu = [{k:v.cpu() for k, v in t.items()} for t in targets]        
+            metric.update (filtered_outputs, targets_cpu)
+    results = metric.compute()
+    return results
 
 
 

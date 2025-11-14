@@ -27,7 +27,8 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision.models.detection import fasterrcnn_resnet50_fpn, FasterRCNN_ResNet50_FPN_Weights
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchvision.ops import box_iou
-
+from torchvision import transforms
+import torchvision.transforms.functional as F
 
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
@@ -137,6 +138,8 @@ class USDataset(Dataset):
 
 def collate_fn(batch):
     return tuple(zip(*batch))
+
+
 
 
 # ----------------------------- Early Stopping -----------------------------
@@ -316,6 +319,22 @@ def run_training(config_key):
 
     #--------Dataset + loaders----------------------------------------------------------------------
     train_dataset = USDataset(train_csv, train_dir, transform=train_transform)
+    img1, target1 = train_dataset[0]
+    img2, target2 = train_dataset[8]
+    print(img1, target1)
+    print(target2)
+    def show(imgs): 
+            if not isinstance(imgs, list):
+                imgs = [imgs]
+            fig, axs = plt.subplots(ncols=len(imgs), squeeze=False)
+            for i, img in enumerate(imgs):
+                img = img.detach()
+                img = F.to_pil_image(img)
+                axs[0,i].imshow(np.asarray(img))
+                axs[0,i].set(xticklabels=[], yticklabels=[], xticks=[], yticks=[])
+            plt.show()
+    show([img1])
+   
     val_dataset = USDataset(val_csv, val_dir, transform=val_transform)
     train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, collate_fn=collate_fn)
     val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False, collate_fn=collate_fn)
@@ -323,6 +342,7 @@ def run_training(config_key):
     #---------Model---------------------------------
     num_classes = 3
     model = fasterrcnn_resnet50_fpn(weights=FasterRCNN_ResNet50_FPN_Weights.COCO_V1)
+    
     in_features = model.roi_heads.box_predictor.cls_score.in_features
     model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
     model.to(device)
@@ -379,24 +399,27 @@ if __name__ == "__main__":
     all_losses, all_metrics = [], []
 
     # Run both training phases sequentially---
-for cfg_key in ["no_aug", "low_aug"]:
+    for cfg_key in ["no_aug", "low_aug"]:
         _, loss_df, metrics_df = run_training(cfg_key)
         all_losses.append(loss_df)
         all_metrics.append(metrics_df)
         
-# Concatenate all configs into single CSVs
-all_losses_df = pd.concat(all_losses, ignore_index=True)
-all_losses_df.to_csv("all_augment_losses.csv", index=False)
+    # Concatenate all configs into single CSVs
+    all_losses_df = pd.concat(all_losses, ignore_index=True)
+    all_losses_df.to_csv("all_augment_losses.csv", index=False)
 
-all_metrics_df = pd.concat(all_metrics, ignore_index=True)
-all_metrics_df.to_csv("all_augment_metrics.csv", index=False)
+    all_metrics_df = pd.concat(all_metrics, ignore_index=True)
+    all_metrics_df.to_csv("all_augment_metrics.csv", index=False)
     
-run_training(cfg_key)
-
-print("\n training phases complete.")
-
+    run_training(cfg_key)
     
 
-#Plot all curves 
-plt_all_loss_curves()
+    print("\n training phases complete.")
+
+  
+    
+    
+
+    #Plot all curves 
+    plt_all_loss_curves()
 
